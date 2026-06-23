@@ -1,0 +1,11 @@
+# Runtime data (real usage/limits/session info — never commit)
+data/
+statusline-latest.json
+*.log
+
+# User-supplied custom pet sprites (bring-your-own; not distributed)
+pets/external/
+
+# Deps & OS cruft
+node_modules/
+.DS_Store

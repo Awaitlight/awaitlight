@@ -1,0 +1,10 @@
+{
+  "name": "ai-cockpit-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "本地优先的 AI 编程 agent 横屏副屏 cockpit —— statusLine 桥 + SSE 服务 + 手机网页。第一目的是验证 rate_limits 等字段在你账号上是否真的可得。",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
