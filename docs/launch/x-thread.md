@@ -12,6 +12,6 @@ Post from your own @awaitlight account. Attach the demo image/GIF to tweet 1. Ke
 
 **4/** Setup is one command: run a tiny zero-dep Node server on your machine, then open the printed LAN address on a spare phone on the same Wi-Fi, in landscape. That's it. It's fully local — talks only to your own phone over Wi-Fi. No cloud, no telemetry. Multiple themes, English + Chinese.
 
-**5/** It's open source and free for non-commercial use. Repo here: https://github.com/Awaitlight/awaitlight
+**5/** It's open source (MIT) and free — do whatever you want with it. Repo here: https://github.com/Awaitlight/awaitlight
 
 If you give it a spin, I'd love to hear what your wall looks like. #buildinpublic

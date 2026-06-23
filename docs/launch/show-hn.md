@@ -19,7 +19,7 @@ How it works: you run a Node server on your computer. It prints a LAN address. Y
 
 How state detection works (the part I most want feedback on): the tools write local session logs — for Claude Code these are the JSONL files under ~/.claude/projects/, and the other tools have their own local session/log files. The server watches those files and reads the tail to infer state from the most recent events: an unanswered tool-permission request reads as "waiting on you," a recent assistant/tool event as "running," a stretch of no new events as "idle." Usage and cost come from the same logs. So it's heuristic and it can lag or misread, and when a tool changes its log format it breaks until I catch up.
 
-On the server itself: it's one ~600-line file. No Express, no bundler, no client framework — just Node's built-in http and fs, which is why there's no npm install tree to audit. Needs a recent Node (18+). English and Chinese.
+On the server itself: it's one ~790-line file. No Express, no bundler, no client framework — just Node's built-in http and fs, which is why there's no npm install tree to audit. Needs a recent Node (18+). English and Chinese.
 
 A note on security: the server binds on your LAN with no auth, so anyone on the same network can open the page and see your project names, model, and cost. Treat it as a trusted-home-network tool, not something to run on coffee-shop Wi-Fi.
 
@@ -31,7 +31,7 @@ Honest about the limits:
 - The phone has to be on the same network as your machine; it's a LAN dashboard, not a hosted service.
 - It's an independent project. Not affiliated with or endorsed by Anthropic, OpenAI, or Anysphere — I just read the files their tools write locally.
 
-On licensing, to be upfront: this is source-available, not OSS. It's dual-licensed — free for non-commercial use under PolyForm Noncommercial, and for commercial use you email me. I'm a solo dev and I want to keep the option to charge companies while keeping it free for individuals. I'd rather say that plainly here than have you find out from the LICENSE file.
+On licensing: it's MIT — properly open source, free for any use, commercial included. Do whatever you want with it.
 
 Repo: https://github.com/Awaitlight/awaitlight
 

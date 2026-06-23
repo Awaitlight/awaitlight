@@ -25,7 +25,7 @@ A few things I care about:
 - Zero dependencies. It's a single Node server, nothing else to install.
 - English and Chinese, a handful of color themes.
 
-The code's public on GitHub — to be precise it's source-available, not OSI open source: free for personal/non-commercial use under PolyForm Noncommercial, and commercial use is a quick email. I'd rather say that plainly than mislabel it.
+The code's public on GitHub under the MIT license — properly open source, free for any use including commercial.
 
 Repo: https://github.com/Awaitlight/awaitlight
 

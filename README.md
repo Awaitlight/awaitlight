@@ -84,11 +84,8 @@ own original creature.
 
 ## License
 
-Awaitlight is **dual-licensed**:
-
-- **Non-commercial use is free** under the **PolyForm Noncommercial License 1.0.0** — see
-  [`LICENSE`](LICENSE).
-- **For commercial use**, contact <hello@awaitlight.com> to purchase a commercial license.
+Awaitlight is released under the **MIT License** — fully open source and free for any use,
+including commercial. See [`LICENSE`](LICENSE).
 
 Third-party components and trademark notices are listed in
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
