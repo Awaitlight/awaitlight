@@ -1,0 +1,55 @@
+<svg viewBox="0 0 1200 540" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, 'Segoe UI', sans-serif" role="img" aria-label="Awaitlight status display: a glowing halo showing an agent executing, with model, context window and usage limits">
+  <rect x="6" y="6" width="1188" height="528" rx="30" fill="#0f1218"/>
+  <rect x="6.5" y="6.5" width="1187" height="527" rx="29.5" fill="none" stroke="#ffffff" stroke-opacity="0.09"/>
+
+  <g>
+    <circle cx="322" cy="272" r="150" fill="#3399ff" opacity="0.05"/>
+    <circle cx="322" cy="272" r="206" fill="none" stroke="#3399ff" stroke-opacity="0.10" stroke-width="2"/>
+    <g transform="rotate(-90 322 272)">
+      <circle cx="322" cy="272" r="178" fill="none" stroke="#3399ff" stroke-opacity="0.15" stroke-width="28" stroke-linecap="round" stroke-dasharray="232 48"/>
+      <circle cx="322" cy="272" r="178" fill="none" stroke="#3399ff" stroke-opacity="0.55" stroke-width="13" stroke-linecap="round" stroke-dasharray="232 48"/>
+      <circle cx="322" cy="272" r="178" fill="none" stroke="#a9d1ff" stroke-width="4.5" stroke-linecap="round" stroke-dasharray="232 48"/>
+    </g>
+    <g transform="rotate(35 322 272)">
+      <circle cx="322" cy="272" r="128" fill="none" stroke="#3399ff" stroke-opacity="0.50" stroke-width="4" stroke-linecap="round" stroke-dasharray="118 84"/>
+    </g>
+    <g transform="rotate(-65 322 272)">
+      <circle cx="322" cy="272" r="100" fill="none" stroke="#66b3ff" stroke-opacity="0.45" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="86 90"/>
+    </g>
+    <g transform="rotate(150 322 272)">
+      <circle cx="322" cy="272" r="74" fill="none" stroke="#7cc0ff" stroke-opacity="0.42" stroke-width="3" stroke-linecap="round" stroke-dasharray="58 90"/>
+    </g>
+    <text x="322" y="266" text-anchor="middle" fill="#a9d1ff" font-size="34" font-weight="bold" letter-spacing="0.5">Executing</text>
+    <text x="322" y="294" text-anchor="middle" fill="#5b6b82" font-size="12.5" letter-spacing="3.5">3 AGENTS RUNNING</text>
+  </g>
+
+  <g>
+    <text x="624" y="112" fill="#ff8830" font-size="13" font-weight="bold" letter-spacing="3">CLAUDE CODE</text>
+    <text x="624" y="156" fill="#eef1f6" font-size="35" font-weight="bold">Add OAuth login flow</text>
+    <text x="624" y="194" fill="#c6ccd6" font-size="18">Claude Opus 4.8</text>
+    <rect x="822" y="180" width="40" height="22" rx="11" fill="#ffffff" fill-opacity="0.08"/>
+    <text x="842" y="195" text-anchor="middle" fill="#c6ccd6" font-size="12.5" font-weight="bold">1M</text>
+    <rect x="872" y="180" width="80" height="22" rx="11" fill="#ff8830" fill-opacity="0.16"/>
+    <text x="912" y="195" text-anchor="middle" fill="#ffb877" font-size="12.5" font-weight="bold">Max 20×</text>
+
+    <line x1="624" y1="224" x2="1144" y2="224" stroke="#ffffff" stroke-opacity="0.08"/>
+
+    <text x="624" y="276" fill="#9aa4b2" font-size="14.5" font-weight="bold" letter-spacing="1.5">CONTEXT</text>
+    <text x="1144" y="282" text-anchor="end" fill="#eef1f6" font-size="40" font-weight="bold">38<tspan font-size="22">%</tspan></text>
+    <rect x="624" y="296" width="520" height="9" rx="4.5" fill="#ffffff" fill-opacity="0.07"/>
+    <rect x="624" y="296" width="198" height="9" rx="4.5" fill="#f0b84a"/>
+    <text x="624" y="322" fill="#6b7482" font-size="12.5">380k / 1M tokens</text>
+
+    <text x="624" y="368" fill="#9aa4b2" font-size="14.5" font-weight="bold" letter-spacing="1.5">5-HOUR</text>
+    <text x="1144" y="374" text-anchor="end" fill="#eef1f6" font-size="40" font-weight="bold">23<tspan font-size="22">%</tspan></text>
+    <rect x="624" y="388" width="520" height="9" rx="4.5" fill="#ffffff" fill-opacity="0.07"/>
+    <rect x="624" y="388" width="120" height="9" rx="4.5" fill="#46d07a"/>
+    <text x="624" y="414" fill="#6b7482" font-size="12.5">resets in 1h 13m</text>
+
+    <text x="624" y="460" fill="#9aa4b2" font-size="14.5" font-weight="bold" letter-spacing="1.5">7-DAY</text>
+    <text x="1144" y="466" text-anchor="end" fill="#eef1f6" font-size="40" font-weight="bold">41<tspan font-size="22">%</tspan></text>
+    <rect x="624" y="480" width="520" height="9" rx="4.5" fill="#ffffff" fill-opacity="0.07"/>
+    <rect x="624" y="480" width="213" height="9" rx="4.5" fill="#f0b84a"/>
+    <text x="624" y="506" fill="#6b7482" font-size="12.5">resets in 5d 8h</text>
+  </g>
+</svg>

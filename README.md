@@ -2,6 +2,8 @@
 
 **Turn any spare phone into a live status display for your AI coding agents.**
 
+![Awaitlight — a glowing status halo showing an agent executing, with model, context window and usage limits](docs/hero.png)
+
 Awaitlight runs a tiny local server on your computer and serves a landscape web UI you open
 on a spare phone. Prop the phone next to your keyboard and, at a glance, you can see what
 your agents are doing without alt-tabbing into a terminal.
