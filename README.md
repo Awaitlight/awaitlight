@@ -19,6 +19,10 @@ running, a little original pixel companion keeps the screen alive.
 It reads agent activity locally on your machine — nothing about your code or sessions
 leaves your network.
 
+Here's the halo reacting while an agent thinks:
+
+![The Awaitlight status halo animating in the thinking state](docs/halo.gif)
+
 ### Works with
 
 Awaitlight works with **Claude Code**, **Codex**, **Cursor**, and **Claude Cowork**. These
