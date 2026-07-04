@@ -22,12 +22,12 @@
     --glow:none; --scan:0; --grain:.035;
     --font-ui:Inter,-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif;
     --font-hero:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-    --r:16px; --r-sm:6px; --r-md:10px; --r-pill:9999px;
+    --r:16px; --r-md:10px; --r-pill:9999px;
     --hairline:rgba(255,255,255,.09); --hairline-strong:rgba(255,255,255,.18);
     --inner-shine:inset 0 1px 0 rgba(255,255,255,.07);
     --ease:cubic-bezier(.22,1,.36,1); --dur-base:240ms; --dur-slow:400ms;
   }
-  [data-theme="tokyo-night"]{ --bg:#101115; --panel:#181a22; --panel2:#242732; --line:#343847; --text:#f1eee7; --dim:#9aa0b2; --faint:#5f6678; --accent:#86b7ff; --ok:#9ece6a; --warn:#e0af68; --bad:#f7768e; --glow:none; --scan:0; }
+  /* tokyo-night（默认主题）的变量与 :root 完全一致，直接复用 :root，不再重复声明 */
   [data-theme="raycast-minimal"]{ --bg:#08090b; --panel:#141517; --panel2:#1e1f22; --line:#2a2d2f; --text:#f4f4f6; --dim:#9c9c9d; --faint:#6a6b6c; --accent:#57c1ff; --ok:#59d499; --warn:#ffc533; --bad:#ff6161; --glow:none; --scan:0; --font-hero:Inter,system-ui,sans-serif; }
   [data-theme="terminal-tui"]{ --bg:#080a08; --panel:#0d1c0d; --panel2:#123212; --line:#1c4a1c; --text:#39ff55; --dim:#2faf44; --faint:#1c6e2c; --accent:#39ff55; --ok:#39ff55; --warn:#ffb000; --bad:#ff5555; --glow:0 0 7px color-mix(in srgb,var(--id) 60%,transparent); --scan:.5; --grain:.06; --font-ui:"JetBrains Mono",ui-monospace,Menlo,monospace; --font-hero:"JetBrains Mono",ui-monospace,Menlo,monospace; }
   [data-theme="glass-aurora"]{ --bg:#0a0f1f; --panel:rgba(22,30,50,.82); --panel2:rgba(34,46,76,.85); --line:rgba(255,255,255,.14); --text:#eaf0ff; --dim:#9aa3bd; --faint:#6b7596; --accent:#57c1ff; --ok:#59d499; --warn:#ffc533; --bad:#ff6161; --glow:none; --scan:0; --grain:.03; }
@@ -36,8 +36,9 @@
   [data-theme="catppuccin-mocha"]{ --bg:#181825; --panel:#1e1e2e; --panel2:#313244; --line:#45475a; --text:#cdd6f4; --dim:#a6adc8; --faint:#7f849c; --accent:#cba6f7; --ok:#a6e3a1; --warn:#f9e2af; --bad:#f38ba8; --glow:none; --scan:0; }
   [data-theme="claude-warm"]{ --bg:#11100e; --panel:#1c1b19; --panel2:#272420; --line:#37342e; --text:#faf9f5; --dim:#b0aea5; --faint:#7a786f; --accent:#d97757; --ok:#59d499; --warn:#ffc533; --bad:#ff6161; --glow:none; --scan:0; }
 
+  /* ===== 基础布局 ===== */
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--font-ui);
+  html,body{margin:0;height:100%;height:100dvh;background:var(--bg);color:var(--text);font-family:var(--font-ui);
     font-feature-settings:'ss03','calt','liga';-webkit-font-smoothing:antialiased;overflow:hidden;
     transition:background var(--dur-slow) var(--ease),color var(--dur-slow) var(--ease)}
   body{display:flex;flex-direction:column;position:relative}
@@ -60,8 +61,9 @@
   .grain{position:fixed;inset:0;z-index:35;pointer-events:none;opacity:var(--grain);mix-blend-mode:overlay;
     background:url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='180'%20height='180'%3E%3Cfilter%20id='n'%3E%3CfeTurbulence%20type='fractalNoise'%20baseFrequency='0.7'%20numOctaves='3'%20stitchTiles='stitch'/%3E%3C/filter%3E%3Crect%20width='180'%20height='180'%20filter='url(%23n)'/%3E%3C/svg%3E") repeat;background-size:180px 180px}
 
-  /* 全屏舞台：左光环 + 右信息，铺满 */
+  /* ===== 全屏舞台：左光环 + 右信息，铺满 ===== */
   .shell{flex:1;display:flex;flex-direction:column;min-height:0;padding:clamp(8px,2vh,16px) clamp(10px,2vw,18px);
+    padding:max(clamp(8px,2vh,16px),env(safe-area-inset-top)) max(clamp(10px,2vw,18px),env(safe-area-inset-right)) max(clamp(8px,2vh,16px),env(safe-area-inset-bottom)) max(clamp(10px,2vw,18px),env(safe-area-inset-left));
     position:relative;z-index:1;transition:transform .8s var(--ease)}
   /* 网格肌理背景（科技感，借鉴 AgentDeck；左实右淡的遮罩） */
   .shell::before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;opacity:.55;
@@ -89,8 +91,7 @@
     background:repeating-conic-gradient(from -18deg,color-mix(in srgb,var(--hs) 13%,transparent) 0deg 1deg,transparent 1deg 9deg);
     opacity:.18;-webkit-mask-image:radial-gradient(circle,transparent 48%,#000 49%,transparent 70%);mask-image:radial-gradient(circle,transparent 48%,#000 49%,transparent 70%)}
   @keyframes haloBreath{0%,100%{transform:translate(-50%,-50%) scale(1);opacity:.38}50%{transform:translate(-50%,-50%) scale(1.16);opacity:.74}}
-  .halo-center{z-index:2}
-  .halo-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  .halo-center{z-index:2;position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
     gap:clamp(5px,1.2vh,9px);pointer-events:none;text-align:center;padding:0 12%}
   .hc-label{font-size:clamp(20px,5vh,34px);font-weight:700;letter-spacing:.02em;line-height:1.04;
     color:var(--hs);text-shadow:0 0 20px color-mix(in srgb,var(--hs) 32%,transparent);transition:color var(--dur-slow) var(--ease)}
@@ -104,7 +105,7 @@
       repeating-linear-gradient(180deg,rgba(255,255,255,.02) 0 1px,transparent 1px 36px);
     -webkit-mask-image:linear-gradient(90deg,transparent,#000 32%,transparent 88%);mask-image:linear-gradient(90deg,transparent,#000 32%,transparent 88%)}
   .info-pane>*{position:relative;z-index:1}
-  .info-pane.glass{background:rgba(20,28,46,.5);backdrop-filter:blur(16px) saturate(170%);-webkit-backdrop-filter:blur(16px) saturate(170%);border-top-color:rgba(255,255,255,.34)}
+  .info-pane.glass{background:rgba(20,28,46,.5);backdrop-filter:blur(16px) saturate(170%);-webkit-backdrop-filter:blur(16px) saturate(170%)}
   .model-head{flex:0 0 auto;border-bottom:1px solid color-mix(in srgb,var(--id) 18%,var(--hairline));padding-bottom:clamp(9px,1.8vh,16px)}
   .mh-k{color:var(--id);font-size:clamp(10px,1.45vh,12px);letter-spacing:1.9px;text-transform:uppercase;font-weight:800;opacity:.95}
   .mh-name{font-size:clamp(18px,4.35vh,30px);font-weight:760;letter-spacing:-.018em;line-height:1.12;margin-top:5px;color:var(--text);
@@ -195,7 +196,7 @@
   body.zen .reveal{display:none!important}   /* 空闲待机：纯全屏，无任何菜单/尾巴 */
 
   /* 自动隐藏的浮动控件（仅全屏 + 常亮，这两项必须在手机上手势触发） */
-  .reveal{position:fixed;top:10px;right:12px;z-index:55;display:flex;align-items:center;gap:9px;padding:7px 10px;
+  .reveal{position:fixed;top:10px;right:12px;top:max(10px,env(safe-area-inset-top));right:max(12px,env(safe-area-inset-right));z-index:55;display:flex;align-items:center;gap:9px;padding:7px 10px;
     background:color-mix(in srgb,var(--panel) 82%,transparent);backdrop-filter:blur(14px) saturate(150%);-webkit-backdrop-filter:blur(14px) saturate(150%);
     border:1px solid var(--hairline);border-radius:13px;box-shadow:0 8px 24px -10px rgba(0,0,0,.5);
     opacity:0;transform:translateY(-8px);pointer-events:none;transition:opacity .3s var(--ease),transform .3s var(--ease)}
@@ -215,7 +216,6 @@
   .rotate .ico{font-size:46px;animation:tilt 2.4s ease-in-out infinite;color:var(--accent)}
   @keyframes tilt{0%,100%{transform:rotate(0)}50%{transform:rotate(90deg)}}
   @media (orientation:portrait) and (max-width:820px){.rotate{display:flex}}
-  .waitmsg{position:fixed;inset:0;display:none;align-items:center;justify-content:center;color:var(--dim);font-size:15px;z-index:5}
 
   @media (prefers-reduced-motion:reduce){
     *{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
@@ -379,16 +379,11 @@ function initHalo(canvas, reduced){
    The default sprite below is an ORIGINAL abstract creature: a rounded body with one big
    centered eye and little feet — it is not based on any character or third-party IP.
    Bring your own art via window.AWAITLIGHT_PET (see pets/README.md). */
-function initPet(canvas, opts){
-  opts = opts || {};
+function initPet(canvas){
   const ctx = canvas.getContext('2d');
   const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const pet = opts.pet || 'default';   // single built-in idle companion
-  const PAL = {
-    // Original Awaitlight palette — teal body (#42d6c1) + amber accents (#ff8830).
-    default:{ body:'#3fc7b4', bodyHi:'#5fe0cd', bodyLo:'#2a9a8b', foot:'#1f7a6e', eye:'#0c1f1c', pupil:'#0c1f1c', iris:'#ff8830', white:'#eafffb', zzz:'#9fe6da', star:'#ffd9a8', starCore:'#fff4e6', glow:'66,214,193', flag:'#ffd166', flag2:'#ff8830', gear:'#173a35', ball:'#ff8830', ball2:'#7a3a12', soccer:'#f4fffd', screen:'#7de7ff', bubble:'#fff0c8' },
-  };
-  const COL = PAL.default;
+  // Original Awaitlight palette — teal body (#42d6c1) + amber accents (#ff8830).
+  const COL = { body:'#3fc7b4', bodyHi:'#5fe0cd', bodyLo:'#2a9a8b', foot:'#1f7a6e', eye:'#0c1f1c', pupil:'#0c1f1c', iris:'#ff8830', white:'#eafffb', zzz:'#9fe6da', star:'#ffd9a8', starCore:'#fff4e6', glow:'66,214,193', flag:'#ffd166', flag2:'#ff8830', gear:'#173a35', ball:'#ff8830', ball2:'#7a3a12', soccer:'#f4fffd', screen:'#7de7ff', bubble:'#fff0c8' };
   let W=10, H=10, dpr=1, S=10, floorY=0, cxHome=0;
   function size(){
     const r = canvas.getBoundingClientRect();
@@ -651,7 +646,7 @@ function initPet(canvas, opts){
       tokens:'Tokens',tokensInOut:'in → out',linesChanged:'lines',
       workspace:'Workspace',burnEta:'~{dur} to cap',rateStable:'rate steady',
       keepAwake:'Keep awake',fullscreen:'Fullscreen',ctrlHint:'settings → computer',
-      rotateTitle:'Rotate your phone',rotateSub:'cockpit is built for landscape',
+      rotateTitle:'Rotate your phone',rotateSub:'Awaitlight is built for landscape',
       resetIn:'resets {dur}',justUpdated:'just now',agoUpdated:'{dur} ago',
       durMin:'{n}m',durHM:'{h}h {m}m',durDH:'{d}d {h}h',
       subscription:'Subscription',api:'API',quota:'Quota',extThinking:'Extended thinking',
@@ -665,7 +660,7 @@ function initPet(canvas, opts){
       tokens:'Token',tokensInOut:'输入 → 输出',linesChanged:'行',
       workspace:'工作区',burnEta:'约 {dur} 触顶',rateStable:'速率平稳',
       keepAwake:'常亮',fullscreen:'全屏',ctrlHint:'设置在电脑端',
-      rotateTitle:'把手机横过来',rotateSub:'cockpit 为横屏设计',
+      rotateTitle:'把手机横过来',rotateSub:'Awaitlight 为横屏设计',
       resetIn:'{dur}后重置',justUpdated:'刚刚',agoUpdated:'{dur}前',
       durMin:'{n} 分',durHM:'{h} 时 {m} 分',durDH:'{d} 天 {h} 时',
       subscription:'订阅版',api:'API',quota:'额度',extThinking:'扩展思考',
@@ -681,6 +676,7 @@ function initPet(canvas, opts){
   // ---------- 字段抽取 ----------
   const num = (v) => { if (v==null||v==='') return null; const x=Number(v); return Number.isFinite(x)?x:null; };
   const get = (o,...ps) => { for(const p of ps){ let c=o,ok=1; for(const k of p.split('.')){ if(c&&k in c) c=c[k]; else {ok=0;break;} } if(ok&&c!=null) return c; } return null; };
+  const limPct=(o)=>o?num(o.used_percentage!=null?o.used_percentage:o.usedPercentage):null;   // 额度对象 → 已用百分比（snake/camel 双写法兼容）
   function metrics(s){ if(!s) return {}; return {
     model:get(s,'model.display_name','model.id'), modelId:get(s,'model.id'),
     ctx:num(get(s,'context_window.used_percentage','contextWindow.used_percentage','context.used_percentage')),
@@ -791,8 +787,7 @@ function initPet(canvas, opts){
     if(st.plan) chips.push('<b class="chip plan">'+esc(st.plan)+'</b>');   // 套餐(Max…)：~/.claude.json 自动读
     if(m.thinking) chips.push('<b class="chip think">'+t('extThinking')+'</b>');   // 扩展思考：转录 thinking 块自动判
     $('modelId').innerHTML=m.model?('<span>'+esc(m.model)+'</span>'+chips.join('')):(m.version?'v'+m.version:'');
-    const fivePct=lim&&lim.five?num(lim.five.used_percentage!=null?lim.five.used_percentage:lim.five.usedPercentage):null;
-    const sevenPct=lim&&lim.seven?num(lim.seven.used_percentage!=null?lim.seven.used_percentage:lim.seven.usedPercentage):null;
+    const fivePct=limPct(lim&&lim.five), sevenPct=limPct(lim&&lim.seven);
     const working = ds.k==='running'||ds.k==='thinking';
     const ctxSub = m.ctx!=null&&m.ctxTokens!=null ? (Math.round(m.ctxTokens/1000)+'k / '+Math.round((m.ctxLimit||200000)/1000)+'k') : '';
     const r5=lim&&lim.five?resetText(lim.five.resets_at!=null?lim.five.resets_at:lim.five.resetsAt):'';
@@ -822,7 +817,8 @@ function initPet(canvas, opts){
 
   // ---------- 多会话监控墙 ----------
   const wallHalos = new Map();   // id -> {card, halo, name, model, ctx, state}
-  const limPct=(o)=>o?num(o.used_percentage!=null?o.used_percentage:o.usedPercentage):null;
+  const HALO_W={running:'executing',thinking:'thinking',waiting:'input_needed',done:'completed',idle:'idle'};   // wall 会话态 → 光环态
+  const SLBL={running:'running',thinking:'thinking',waiting:'awaiting',done:'completed',idle:'idle'};           // wall 会话态 → i18n 文案键
   function abPair(label,p){ const cls=p==null?'':(p>=99?'deplete':p>70?'bad':p>30?'warn':''); const w=p==null?0:Math.max(0,Math.min(100,p));
     return '<span class="ab-pair"><span class="ab-k">'+label+'</span><span class="ab-bar"><i class="'+cls+'" style="transform:scaleX('+(w/100)+')"></i></span><span class="ab-v">'+(p==null?'—':Math.round(p)+'%')+'</span></span>'; }
   function abGroup(name,color,pairsHtml){ return '<span class="ab-group" style="--gc:'+color+'"><span class="ab-prov">'+name+'</span>'+pairsHtml+'</span>'; }
@@ -851,8 +847,6 @@ function initPet(canvas, opts){
         wall.appendChild(card);
         rec={card,halo:initHalo(card.querySelector('canvas'),reduced),name:card.querySelector('.wname'),model:card.querySelector('.wmodel'),ctx:card.querySelector('.wctx'),state:card.querySelector('.wstate')};
         wallHalos.set(sv.id,rec); }
-      const HALO_W={running:'executing',thinking:'thinking',waiting:'input_needed',done:'completed',idle:'idle'};
-      const SLBL={running:'running',thinking:'thinking',waiting:'awaiting',done:'completed',idle:'idle'};
       const stk=sv.state||(sv.active?'running':'idle'), hk=HALO_W[stk]||'idle', col=rec.halo.color(hk);
       rec.halo.set(hk);
       rec.halo.agents(stk==='idle'?0:(sv.agents||0));   // 该对话的子 agent 数 → 套内圈
