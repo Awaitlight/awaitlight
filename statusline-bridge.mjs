@@ -47,11 +47,13 @@ function renderLine(j) {
   const model = j?.model?.display_name || j?.model?.id || 'model';
   const ctx = j?.context_window?.used_percentage ?? j?.contextWindow?.used_percentage ?? j?.context?.used_percentage;
   const rl = j?.rate_limits || j?.rateLimits || {};
-  const five = (rl.five_hour || rl.fiveHour)?.used_percentage ?? (rl.five_hour || rl.fiveHour)?.usedPercentage;
+  const fiveHour = rl.five_hour || rl.fiveHour;
+  const five = fiveHour?.used_percentage ?? fiveHour?.usedPercentage;
   const cost = j?.cost?.total_cost_usd;
   const parts = ['▮ ' + model];
-  if (pct(ctx)) parts.push('ctx ' + pct(ctx));
-  if (pct(five)) parts.push('5h ' + pct(five));
+  const ctxPct = pct(ctx), fivePct = pct(five);
+  if (ctxPct) parts.push('ctx ' + ctxPct);
+  if (fivePct) parts.push('5h ' + fivePct);
   if (Number.isFinite(Number(cost))) parts.push('$' + Number(cost).toFixed(2));
   return parts.join('  ');
 }
