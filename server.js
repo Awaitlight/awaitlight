@@ -1,6 +1,7 @@
-// 本地优先的 cockpit 服务：零依赖 Node。
-// - GET  /          → 横屏 cockpit 网页（手机浏览器打开）
-// - GET  /events    → SSE，推送最新状态
+// 本地优先的 cockpit 服务：零依赖 Node，单文件 ESM。
+// - GET  /            → 横屏 cockpit 网页（手机浏览器打开）
+// - GET  /control     → 电脑端控制台（设置 + 数据源诊断）
+// - GET  /events      → SSE，推送最新状态
 // - POST /ingest      → statusLine 桥喂入的原始 JSON
 // - POST /ingest-hook → hook 桥喂入的事件（运行中/等待确认/空闲等）
 import http from 'node:http';
@@ -17,6 +18,23 @@ try { DatabaseSync = (await import('node:sqlite')).DatabaseSync; } catch {}
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8787;
 
+// ══════════════════ 常量与预编译正则 ══════════════════
+const TAIL_BYTES = 262144;                          // 大文件只尾读 256KB（最近活动都在末尾）
+const HISTORY_MAX = 600;                            // 内存历史条数上限（burn-rate 估算用）
+const DONE_FLASH_MS = 8000;                         // 回合结束后"已完成"绿显示时长，之后转空闲
+const CTX_1M = 1000000;                             // 1M 上下文窗口
+const RE_HAIKU = /haiku/i;                          // 后台额度保鲜模型（haiku）识别
+const RE_INTERRUPTED = /\[Request interrupted/;     // 转录里"用户按了停止"的中断标记
+const RE_THINKING_BLOCK = /"type":"thinking"/;      // 转录里出现过 thinking 块（扩展思考）
+const RE_MODEL_SUFFIX = /\[.*?\]$/;                 // 模型 id 的 [1m] 类后缀
+const RE_1M = /\[1m\]/i;                            // 1M 上下文模型标记
+const RE_COWORK_META = /^local_(?!ditto_).*\.json$/;  // cowork 会话元数据（排除 local_ditto_* 后台跑批）
+const RE_ORG_TIER = /"organizationRateLimitTier"\s*:\s*"([^"]+)"/;
+const RE_USER_TIER = /"userRateLimitTier"\s*:\s*"([^"]+)"/;
+const RE_ICON_PATH = /^\/icon[\w-]*\.(svg|png)$/;
+const RE_NOSLEEP_PATH = /^\/nosleep\.(mp4|webm)$/;
+
+// ══════════════════ 全局状态 + 持久化 ══════════════════
 // 内存中的最新状态 + 一小段历史（用于 burn-rate 估算）
 const state = {
   statusline: null,        // 渲染用的状态对象（来自 statusLine 或会话转录）
@@ -43,41 +61,90 @@ function loadLimits() {
 }
 function persistConfig() { try { writeFileSync(path.join(DATA, 'config.json'), JSON.stringify(state.config)); } catch {} }
 function loadConfig() { try { const c = JSON.parse(readFileSync(path.join(DATA, 'config.json'), 'utf8')); if (c && typeof c === 'object') state.config = { theme: null, lang: null, provider: null, hidden: [], pet: null, ...c }; } catch {} }
+
+// rate_limits 字段随版本可能是 snake/camel/缩写，统一在这里容错抽取
+function pickRateLimits(rl) {
+  return {
+    five: rl.five_hour || rl.fiveHour || rl['5h'] || null,
+    seven: rl.seven_day || rl.sevenDay || rl['7d'] || null,
+  };
+}
 // 从一条 statusLine JSON 里抽 rate_limits，更新持久额度（订阅账号才有）
 function captureLimits(json) {
   const rl = json && (json.rate_limits || json.rateLimits);
   if (!rl) return false;
-  const five = rl.five_hour || rl.fiveHour || rl['5h'] || null;
-  const seven = rl.seven_day || rl.sevenDay || rl['7d'] || null;
+  const { five, seven } = pickRateLimits(rl);
   if (!five && !seven) return false;
   state.limits = { five, seven, capturedAt: Date.now(), model: json.model?.display_name || null };
   state.account = 'subscription';
   persistLimits();
   return true;
 }
-const clients = new Set();
 
-function n(v) { if (v === null || v === undefined || v === '') return null; const x = Number(v); return Number.isFinite(x) ? x : null; }
+// ══════════════════ 通用小工具 ══════════════════
+function num(v) { if (v === null || v === undefined || v === '') return null; const x = Number(v); return Number.isFinite(x) ? x : null; }
 
 // 尽力从 statusLine JSON 里抽取关键指标。字段命名随 Claude Code 版本可能不同，
 // 这里做容错；真正的字段形态以网页“诊断”面板里的原始 JSON 为准。
 function extractMetrics(s) {
   if (!s || typeof s !== 'object') return { model: null, ctx: null, five: null, seven: null, cost: null };
   const model = s.model?.display_name || s.model?.id || null;
-  const cost = n(s.cost?.total_cost_usd);
+  const cost = num(s.cost?.total_cost_usd);
   const ctx =
-    n(s.context_window?.used_percentage) ??
-    n(s.contextWindow?.used_percentage) ??
-    n(s.context?.used_percentage) ?? null;
-  const rl = s.rate_limits || s.rateLimits || {};
-  const five = rl.five_hour || rl.fiveHour || rl['5h'] || null;
-  const seven = rl.seven_day || rl.sevenDay || rl['7d'] || null;
-  const fivePct = five ? n(five.used_percentage ?? five.usedPercentage) : null;
-  const sevenPct = seven ? n(seven.used_percentage ?? seven.usedPercentage) : null;
+    num(s.context_window?.used_percentage) ??
+    num(s.contextWindow?.used_percentage) ??
+    num(s.context?.used_percentage) ?? null;
+  const { five, seven } = pickRateLimits(s.rate_limits || s.rateLimits || {});
+  const fivePct = five ? num(five.used_percentage ?? five.usedPercentage) : null;
+  const sevenPct = seven ? num(seven.used_percentage ?? seven.usedPercentage) : null;
   return { model, ctx, five: fivePct, seven: sevenPct, cost };
 }
 
-// ---------- 会话转录数据源（零配置）----------
+// 追加一条 burn-rate 历史（t=时间戳，s=statusline 形态对象），超上限丢最老
+function pushHistory(t, s) {
+  const m = extractMetrics(s);
+  state.history.push({ t, ctx: m.ctx, five: m.five, seven: m.seven, cost: m.cost });
+  if (state.history.length > HISTORY_MAX) state.history.shift();
+}
+
+// 只读文件的一段（头部或尾部），避免整读大转录
+function readChunk(file, fromEnd, bytes) {
+  let fd = null;
+  try {
+    fd = openSync(file, 'r');
+    const size = fstatSync(fd).size;
+    const start = fromEnd ? Math.max(0, size - bytes) : 0;
+    const len = Math.min(bytes, size - start);
+    const buf = Buffer.alloc(len);
+    readSync(fd, buf, 0, len, start);
+    return buf.toString('utf8');
+  } catch { return ''; }
+  finally { if (fd != null) { try { closeSync(fd); } catch {} } }
+}
+
+// 统一的递归文件枚举：match 过滤文件名，skipDir 跳过子目录；收集 { p: 路径, m: mtimeMs }
+function walkFiles(dir, acc, opts) {
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) { if (opts.skipDir && opts.skipDir(e.name)) continue; walkFiles(p, acc, opts); }
+    else if (opts.match(e.name)) { try { acc.push({ p, m: statSync(p).mtimeMs }); } catch {} }
+  }
+}
+// Claude 会话转录。subagents/ 里是某对话派出的子 agent 转录（agent-*.jsonl），不是独立会话——
+// 否则一个派 5 个 agent 的对话会被枚举成 6 个会话/圆环。子 agent 只由 countActiveAgents 计数成套圈内圈。
+const WALK_CLAUDE = { match: (n) => n.endsWith('.jsonl'), skipDir: (n) => n === 'subagents' };
+const WALK_CODEX = { match: (n) => n.startsWith('rollout-') && n.endsWith('.jsonl') };
+const WALK_AGENT = { match: (n) => n.startsWith('agent-') && n.endsWith('.jsonl') };
+const walkJsonl = (dir, acc) => walkFiles(dir, acc, WALK_CLAUDE);
+const walkRollouts = (dir, acc) => walkFiles(dir, acc, WALK_CODEX);
+
+// 上下文占用：tokens 超过基准窗口 → 视为 1M 窗口模型；百分比一位小数、封顶 100
+function ctxLimitFor(tokens, base) { return tokens > base ? Math.max(base, CTX_1M) : base; }
+function ctxPctOf(tokens, limit) { return Math.min(100, Math.round((tokens / limit) * 1000) / 10); }
+
+// ══════════════════ Claude 会话转录数据源（零配置）══════════════════
 // Claude Code 把每个会话写到 ~/.claude/projects/<编码路径>/<session>.jsonl。
 // 里面的 assistant 消息带 usage（token 用量），可推算上下文占用与模型。
 // 注意：转录文件没有 rate_limits（5h/7d）与精确成本——那两项只有 statusLine 提供。
@@ -88,78 +155,19 @@ const MODEL_NAMES = {
   'claude-sonnet-4-6': 'Claude Sonnet 4.6', 'claude-sonnet-4-5': 'Claude Sonnet 4.5',
   'claude-haiku-4-5': 'Claude Haiku 4.5', 'claude-fable-5': 'Claude Fable 5',
 };
-let tFile = null, tMtime = 0;
-const ignored = new Set();   // 后台保鲜会话的转录文件，排除以免污染真实上下文显示
-
-// ---------- 后台额度保鲜（零操作、保持最新）----------
-const REFRESH_MIN = process.env.COCKPIT_REFRESH_MIN ? Number(process.env.COCKPIT_REFRESH_MIN) : 20;
-const REFRESH_MODEL = process.env.COCKPIT_REFRESH_MODEL || 'claude-haiku-4-5';
-let refreshing = false, lastRefresh = 0;
-function refreshLimits(reason) {
-  if (refreshing) return;
-  refreshing = true; lastRefresh = Date.now();
-  const script = path.join(__dirname, 'refresh-claude.py');
-  let child;
-  try {
-    child = spawn('python3', [script, REFRESH_MODEL], {
-      env: { ...process.env, COCKPIT_LIMITS_ONLY: '1', COCKPIT_PORT: String(PORT) },
-      stdio: 'ignore',
-    });
-  } catch { refreshing = false; return; }
-  const to = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 60000);
-  child.on('exit', () => { clearTimeout(to); refreshing = false; });
-  child.on('error', () => { clearTimeout(to); refreshing = false; });
-}
-
-function walkJsonl(dir, acc) {
-  let entries;
-  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
-  for (const e of entries) {
-    const p = path.join(dir, e.name);
-    // subagents/ 里是某对话派出的子 agent 转录（agent-*.jsonl），不是独立会话——
-    // 否则一个派 5 个 agent 的对话会被枚举成 6 个会话/圆环。子 agent 只由 countActiveAgents 计数成套圈内圈。
-    if (e.isDirectory()) { if (e.name === 'subagents') continue; walkJsonl(p, acc); }
-    else if (e.name.endsWith('.jsonl')) { try { acc.push({ p, m: statSync(p).mtimeMs }); } catch {} }
-  }
-}
+let clFile = null, clMtime = 0;   // 上次选中的"最新真实会话"（变化才广播）
+const ignored = new Set();        // 后台保鲜会话的转录文件，排除以免污染真实上下文显示
 
 function prettyModel(id) {
   if (!id) return 'model';
   if (MODEL_NAMES[id]) return MODEL_NAMES[id];
-  const base = id.replace(/\[.*?\]$/, '');
+  const base = id.replace(RE_MODEL_SUFFIX, '');
   return MODEL_NAMES[base] || id;
 }
 
 // 兜底安全网：末位事件不是 end_turn（即"工作中"），但很久没动 → 仍判空闲，
 // 防遗弃/等权限会话常驻"运行中"。设大一点(180s)优先避免作者最反感的"工作时闪空闲"。
 const STALE_MS = 180 * 1000;
-
-// 账号套餐（Max/Pro…）：零操作自动读 ~/.claude.json 的 oauthAccount.*RateLimitTier。
-// 用正则抽取，避免 JSON.parse 整个大文件；5 分钟缓存（套餐基本不变）。
-const CLAUDE_JSON = path.join(os.homedir(), '.claude.json');
-let planCache = null, planAt = 0;
-function prettyPlan(tier) {
-  if (!tier) return null; const t = String(tier).toLowerCase();
-  if (t.includes('max_20x')) return 'Max 20×';
-  if (t.includes('max_5x')) return 'Max 5×';
-  if (t.includes('max')) return 'Max';
-  if (t.includes('team')) return 'Team';
-  if (t.includes('enterprise')) return 'Enterprise';
-  if (t.includes('pro')) return 'Pro';
-  if (t.includes('free')) return 'Free';
-  return null;
-}
-function readClaudePlan() {
-  const now = Date.now();
-  if (planCache !== null && now - planAt < 300000) return planCache;
-  planAt = now;
-  try {
-    const txt = readFileSync(CLAUDE_JSON, 'utf8');
-    const m = txt.match(/"organizationRateLimitTier"\s*:\s*"([^"]+)"/) || txt.match(/"userRateLimitTier"\s*:\s*"([^"]+)"/);
-    planCache = prettyPlan(m && m[1]);
-  } catch {}
-  return planCache;
-}
 
 // 统一解析一个 Claude 会话转录。兼容两种格式：
 //  · CLI 版：assistant 行带 message.usage，首行带 cwd
@@ -168,9 +176,8 @@ function readClaudePlan() {
 // 返回 { model, modelId, ctxPct, ctxTokens, ctxLimit, cwd, title, lastTs, state }。
 function readClaudeSession(file, mtime) {
   let size = 0; try { size = statSync(file).size; } catch { return null; }
-  const TAIL = 262144;                                   // 尾读 256KB
-  const big = size > TAIL;
-  let text; try { text = readChunk(file, big, big ? TAIL : size); } catch { return null; }
+  const big = size > TAIL_BYTES;
+  let text; try { text = readChunk(file, big, big ? TAIL_BYTES : size); } catch { return null; }
   let lines = text.split('\n');
   if (big) lines = lines.slice(1);                       // 丢弃尾读时可能被截断的首行
   let model = null, usage = null, cwd = null, title = null, lastTs = null, lastKind = null;
@@ -185,7 +192,7 @@ function readClaudeSession(file, mtime) {
       } else if (ty === 'user') {
         const c = o.message && o.message.content;
         const txt = Array.isArray(c) ? c.map((x) => (x && x.type === 'text') ? (x.text || '') : '').join('') : (typeof c === 'string' ? c : '');
-        if (/\[Request interrupted/.test(txt)) lastKind = 'stopped';   // 用户按了停止（中断标记）→ 立即空闲
+        if (RE_INTERRUPTED.test(txt)) lastKind = 'stopped';   // 用户按了停止（中断标记）→ 立即空闲
         else { const toolResult = Array.isArray(c) && c.some((x) => x && x.type === 'tool_result'); lastKind = toolResult ? 'work' : 'submit'; }   // tool_result=工具完成继续；纯文本=刚提交→思考
       } else lastKind = 'work';
     }
@@ -200,17 +207,17 @@ function readClaudeSession(file, mtime) {
   }
   if (!usage) return null;
   const tokens = (usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0);
-  const limit = tokens > CTX_LIMIT ? Math.max(CTX_LIMIT, 1000000) : CTX_LIMIT;
-  const pct = Math.min(100, Math.round((tokens / limit) * 1000) / 10);
+  const limit = ctxLimitFor(tokens, CTX_LIMIT);
+  const pct = ctxPctOf(tokens, limit);
   const ts = lastTs || mtime || Date.now();
   const age = Date.now() - ts;
   let state;
   if (lastKind === 'stopped') state = 'idle';                     // 用户中断 → 立即空闲（修"按了停止仍显示思考中"）
-  else if (lastKind === 'end') state = age < 8000 ? 'done' : 'idle';   // 回合结束：8s 内"已完成"绿，之后空闲
+  else if (lastKind === 'end') state = age < DONE_FLASH_MS ? 'done' : 'idle';   // 回合结束：8s 内"已完成"绿，之后空闲
   else if (age > STALE_MS) state = 'idle';                        // 安全网
   else if (lastKind === 'submit') state = 'thinking';
   else state = 'running';                                         // work(tool_use/tool_result/流式)=执行中
-  const thinking = /"type":"thinking"/.test(text);   // 近期有 thinking 块 → 扩展思考开启（零操作自动判）
+  const thinking = RE_THINKING_BLOCK.test(text);   // 近期有 thinking 块 → 扩展思考开启（零操作自动判）
   return { model: prettyModel(model), modelId: model, ctxPct: pct, ctxTokens: tokens, ctxLimit: limit, cwd, title, lastTs: ts, state, thinking };
 }
 
@@ -234,22 +241,68 @@ function pollTranscripts() {
   acc.sort((a, b) => b.m - a.m);
   // 选最新的"真实"会话：跳过后台 haiku 保鲜会话（它们 mtime 很新会盖住真实会话）
   let p = null, m = 0, syn = null;
-  for (const c of acc) { const s = buildFromTranscript(c.p); if (!s) continue; if (/haiku/i.test((s.model && s.model.id) || '')) continue; p = c.p; m = c.m; syn = s; break; }
+  for (const c of acc) { const s = buildFromTranscript(c.p); if (!s) continue; if (RE_HAIKU.test((s.model && s.model.id) || '')) continue; p = c.p; m = c.m; syn = s; break; }
   if (!syn) return;
-  if (p === tFile && m === tMtime) return;     // 没变化
-  tFile = p; tMtime = m;
+  if (p === clFile && m === clMtime) return;   // 没变化
+  clFile = p; clMtime = m;
   // 不要覆盖正在活跃的真实 statusLine 数据
   if (state.source === 'statusline' && state.updatedAt && Date.now() - state.updatedAt < 30000) return;
   state.statusline = syn;
   state.source = 'transcript';
   state.updatedAt = m;
-  const mm = extractMetrics(syn);
-  state.history.push({ t: m, ctx: mm.ctx, five: mm.five, seven: mm.seven, cost: mm.cost });
-  if (state.history.length > 600) state.history.shift();
+  pushHistory(m, syn);
   broadcast();
 }
 
-// ---------- Codex CLI 数据源（~/.codex/sessions rollout）----------
+// ══════════════════ 后台额度保鲜（零操作、保持最新）══════════════════
+const REFRESH_MIN = process.env.COCKPIT_REFRESH_MIN ? Number(process.env.COCKPIT_REFRESH_MIN) : 20;
+const REFRESH_MODEL = process.env.COCKPIT_REFRESH_MODEL || 'claude-haiku-4-5';
+let refreshing = false;
+function refreshLimits() {
+  if (refreshing) return;
+  refreshing = true;
+  const script = path.join(__dirname, 'refresh-claude.py');
+  let child;
+  try {
+    child = spawn('python3', [script, REFRESH_MODEL], {
+      env: { ...process.env, COCKPIT_LIMITS_ONLY: '1', COCKPIT_PORT: String(PORT) },
+      stdio: 'ignore',
+    });
+  } catch { refreshing = false; return; }
+  const to = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 60000);
+  child.on('exit', () => { clearTimeout(to); refreshing = false; });
+  child.on('error', () => { clearTimeout(to); refreshing = false; });
+}
+
+// ══════════════════ 账号套餐（Max/Pro…）══════════════════
+// 零操作自动读 ~/.claude.json 的 oauthAccount.*RateLimitTier。
+// 用正则抽取，避免 JSON.parse 整个大文件；5 分钟缓存（套餐基本不变）。
+const CLAUDE_JSON = path.join(os.homedir(), '.claude.json');
+let planCache = null, planAt = 0;
+function prettyPlan(tier) {
+  if (!tier) return null; const t = String(tier).toLowerCase();
+  if (t.includes('max_20x')) return 'Max 20×';
+  if (t.includes('max_5x')) return 'Max 5×';
+  if (t.includes('max')) return 'Max';
+  if (t.includes('team')) return 'Team';
+  if (t.includes('enterprise')) return 'Enterprise';
+  if (t.includes('pro')) return 'Pro';
+  if (t.includes('free')) return 'Free';
+  return null;
+}
+function readClaudePlan() {
+  const now = Date.now();
+  if (planCache !== null && now - planAt < 300000) return planCache;
+  planAt = now;
+  try {
+    const txt = readFileSync(CLAUDE_JSON, 'utf8');
+    const m = txt.match(RE_ORG_TIER) || txt.match(RE_USER_TIER);
+    planCache = prettyPlan(m && m[1]);
+  } catch {}
+  return planCache;
+}
+
+// ══════════════════ Codex CLI 数据源（~/.codex/sessions rollout）══════════════════
 const CODEX_DIR = path.join(os.homedir(), '.codex');
 const CODEX_MODEL_NAMES = { 'gpt-5.5': 'GPT-5.5', 'gpt-5.4': 'GPT-5.4', 'gpt-5.1-codex': 'GPT-5.1 Codex', 'gpt-5-codex': 'GPT-5 Codex', 'gpt-5-codex-mini': 'GPT-5 Codex mini' };
 let cxFile = null, cxMtime = 0, cxModel = null;
@@ -262,40 +315,25 @@ function readCodexAuth() {
   } catch {}
   return 'unknown';
 }
-function readChunk(file, fromEnd, bytes) {
-  let fd = null;
-  try {
-    fd = openSync(file, 'r');
-    const size = fstatSync(fd).size;
-    const start = fromEnd ? Math.max(0, size - bytes) : 0;
-    const len = Math.min(bytes, size - start);
-    const buf = Buffer.alloc(len);
-    readSync(fd, buf, 0, len, start);
-    return buf.toString('utf8');
-  } catch { return ''; }
-  finally { if (fd != null) { try { closeSync(fd); } catch {} } }
-}
-function walkRollouts(dir, acc) {
-  let entries; try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
-  for (const e of entries) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) walkRollouts(p, acc);
-    else if (e.name.startsWith('rollout-') && e.name.endsWith('.jsonl')) { try { acc.push({ p, m: statSync(p).mtimeMs }); } catch {} }
-  }
-}
+// rollout 的 model 写在文件头部且不再变化 → 按路径缓存，省去监控墙每 2s 重读 64KB 头部
+const cxModelCache = new Map();
 function codexFindModel(file) {
+  if (cxModelCache.has(file)) return cxModelCache.get(file);
   const head = readChunk(file, false, 65536);
   for (const ln of head.split('\n')) {
     let o; try { o = JSON.parse(ln); } catch { continue; }
     const p = o && o.payload;
-    if (p && typeof p.model === 'string') return p.model;
-    if (o && typeof o.model === 'string') return o.model;
+    const model = (p && typeof p.model === 'string') ? p.model : (o && typeof o.model === 'string') ? o.model : null;
+    if (model) {
+      if (cxModelCache.size > 128) cxModelCache.clear();
+      cxModelCache.set(file, model);   // 只缓存命中结果：没找到可能是头部还没写全，下次再试
+      return model;
+    }
   }
   return null;
 }
-function codexLastTokenCount(file) {
-  const tail = readChunk(file, true, 262144);
-  const lines = tail.split('\n');
+function codexLastTokenCount(file, tail) {
+  const lines = (tail ?? readChunk(file, true, TAIL_BYTES)).split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
     let o; try { o = JSON.parse(lines[i]); } catch { continue; }
     const p = o && o.payload;
@@ -303,6 +341,16 @@ function codexLastTokenCount(file) {
   }
   return null;
 }
+// token_count 事件 → 用量三元组（当前输入 tokens / 上下文窗口 / 累计用量）
+function codexUsage(tc) {
+  const info = tc.info || {};
+  return {
+    cur: (info.last_token_usage || {}).input_tokens || 0,
+    cw: info.model_context_window || null,
+    total: info.total_token_usage || {},
+  };
+}
+function codexCtxPct(cur, cw) { return cw ? Math.round((cur / cw) * 1000) / 10 : null; }
 
 // ---------- Codex 回合状态（关键修复）----------
 // Codex rollout 用 task_started / task_complete / turn_aborted 包住每个回合，这正好对应
@@ -319,9 +367,8 @@ const CODEX_STALE_MS = 30 * 60 * 1000;
 const CX_THINK = new Set(['reasoning', 'user_message']);                 // 思考类活动
 const CX_LIFECYCLE = new Set(['task_started', 'task_complete', 'turn_aborted', 'thread_rolled_back']);
 const CX_SKIP = new Set(['token_count', 'turn_context', 'session_meta', 'context_compacted']);   // 不代表"思考/执行"的元事件
-function readCodexState(file, mtime) {
-  const tail = readChunk(file, true, 262144);
-  const lines = tail.split('\n');
+function readCodexState(file, mtime, tail) {
+  const lines = (tail ?? readChunk(file, true, TAIL_BYTES)).split('\n');
   let lifecycle = null, activity = null, lastTs = null, parsedAny = false;
   for (let i = lines.length - 1; i >= 0; i--) {                          // 从尾部往前：第一个命中即最新
     let o; try { o = JSON.parse(lines[i]); } catch { continue; }
@@ -337,11 +384,11 @@ function readCodexState(file, mtime) {
   let fm = mtime; if (fm == null) { try { fm = statSync(file).mtimeMs; } catch { fm = 0; } }
   // 超大单事件兜底：一条工具输出 >256KB（实测 max 5.5MB，p90>50KB 的事件达 384KB）时，尾部全是这条事件的中段、整段无法解析
   // → lifecycle/activity/lastTs 全 null。此刻文件正被写入(回合进行中)，绝不能判空闲——用文件 mtime 作活跃信号判"执行中"。
-  const giantEvent = !parsedAny && size > 262144;
+  const giantEvent = !parsedAny && size > TAIL_BYTES;
   const ts = lastTs || fm || 0;
   const age = Date.now() - ts;
   let state;
-  if (lifecycle === 'task_complete') state = age < 8000 ? 'done' : 'idle';
+  if (lifecycle === 'task_complete') state = age < DONE_FLASH_MS ? 'done' : 'idle';
   else if (lifecycle === 'turn_aborted' || lifecycle === 'thread_rolled_back') state = 'idle';
   else if (age > CODEX_STALE_MS) state = 'idle';                         // 安全网：太久无任何写入（崩溃/遗弃）
   else if (lifecycle === 'task_started') state = activity || 'running';  // 回合进行中（停止按钮）→ 工作中
@@ -361,11 +408,7 @@ function pollCodex() {
   cxMtime = newest.m;
   const tc = codexLastTokenCount(newest.p);
   if (!tc) return;
-  const info = tc.info || {};
-  const last = info.last_token_usage || {};
-  const total = info.total_token_usage || {};
-  const cw = info.model_context_window || null;
-  const cur = last.input_tokens || 0;
+  const { cur, cw, total } = codexUsage(tc);
   const rl = tc.rate_limits || null;
   let limits = null;
   if (rl && (rl.primary || rl.secondary)) {
@@ -377,39 +420,14 @@ function pollCodex() {
   state.codex = {
     available: true,
     model: CODEX_MODEL_NAMES[id] || id, modelId: id,
-    ctxPct: cw ? Math.round((cur / cw) * 1000) / 10 : null, ctxTokens: cur, ctxMax: cw,
+    ctxPct: codexCtxPct(cur, cw), ctxTokens: cur, ctxMax: cw,
     tokIn: total.input_tokens != null ? total.input_tokens : null, tokOut: total.output_tokens != null ? total.output_tokens : null,
     limits, account: readCodexAuth(), updatedAt: newest.m,
   };
   broadcast();
 }
 
-// ---------- 多 provider 统一视图 ----------
-function claudeView() {
-  if (!state.statusline && !state.limits) return null;
-  return {
-    label: 'Claude Code', statusline: state.statusline, limits: state.limits, plan: readClaudePlan(),
-    account: state.account || (state.limits ? 'subscription' : 'unknown'),
-    source: state.source, lastHook: state.lastHook, updatedAt: state.updatedAt, history: state.history,
-  };
-}
-function codexView() {
-  const c = state.codex;
-  if (!c || !c.available) return null;
-  // 状态每次快照都从 rollout 实时算（每 2s 一次）——这样 done→idle、stale→idle 的"按时间推进"
-  // 不依赖文件 mtime 变化，思考时(文件十几秒不写)也不会误判空闲。
-  const cs = cxFile ? readCodexState(cxFile, c.updatedAt) : { state: 'idle' };
-  return {
-    label: 'Codex CLI',
-    statusline: {
-      _source: 'rollout', _state: cs.state, model: { display_name: c.model, id: c.modelId },
-      context_window: { used_percentage: c.ctxPct, used_tokens: c.ctxTokens, context_window_size: c.ctxMax,
-        total_input_tokens: c.tokIn, total_output_tokens: c.tokOut },
-    },
-    limits: c.limits, account: c.account, source: 'rollout', lastHook: null, updatedAt: c.updatedAt, history: [],
-  };
-}
-// ---------- Cursor 数据源（state.vscdb，需 Node 内置 node:sqlite）----------
+// ══════════════════ Cursor 数据源（state.vscdb，需 Node 内置 node:sqlite）══════════════════
 const CURSOR_DB = path.join(os.homedir(), 'Library', 'Application Support', 'Cursor', 'User', 'globalStorage', 'state.vscdb');
 let cuMtime = 0;
 function pollCursor() {
@@ -430,17 +448,8 @@ function pollCursor() {
   } catch {} finally { try { if (db) db.close(); } catch {} }
   broadcast();
 }
-function cursorView() {
-  const c = state.cursor;
-  if (!c || !c.available) return null;
-  return {
-    label: 'Cursor',
-    statusline: { _source: 'cursor', model: { display_name: c.model || 'Cursor', id: c.model || '' }, context_window: null },
-    account: 'budget', subStatus: c.subStatus, limits: null, source: 'cursor', lastHook: null, updatedAt: c.updatedAt, history: [],
-  };
-}
 
-// ---------- Claude Cowork 数据源（独立会话，不并入 Claude Code）----------
+// ══════════════════ Claude Cowork 数据源（独立会话，不并入 Claude Code）══════════════════
 // Cowork = Claude 桌面 App 里跑在沙箱 VM 的 Claude Code，数据写在 Application Support 下，每个会话一份元数据
 // local_<id>.json（含 title/model/工作目录/最近活动）+ 一个会话目录 local_<id>/（内含 VM 的 .claude/projects 标准转录）。
 // 转录格式与普通 Claude Code 完全一致 → 复用 readClaudeSession 算上下文/状态。5h/7d 额度复用账号级 state.limits（同一 Max 账号）。
@@ -454,7 +463,7 @@ function walkCoworkMeta(dir, acc, depth) {
     if (e.isDirectory() && e.name.startsWith('local_')) continue;    // 会话内容目录，别进去
     const p = path.join(dir, e.name);
     if (e.isDirectory()) walkCoworkMeta(p, acc, (depth || 0) + 1);
-    else if (/^local_(?!ditto_).*\.json$/.test(e.name)) acc.push(p); // 排除 local_ditto_*（后台 agent 跑批，非用户会话）
+    else if (RE_COWORK_META.test(e.name)) acc.push(p);               // 排除 local_ditto_*（后台 agent 跑批，非用户会话）
   }
 }
 function coworkTranscript(sessDir, cliId) {
@@ -479,9 +488,10 @@ function listCoworkSessions() {
     const folder = (Array.isArray(meta.userSelectedFolders) && meta.userSelectedFolders[0]) || meta.cwd || null;
     // 上下文窗口按"元数据里的模型"定 1M/200k——转录里的 message.model 不带 [1m] 后缀，只有元数据带，故用它最可靠（与全局 CTX_LIMIT 无关）。
     let ctxLimit = null, ctxPct = null; const ctxTokens = r ? r.ctxTokens : null;
-    if (r) { const base = /\[1m\]/i.test(meta.model || '') ? 1000000 : 200000;
-      ctxLimit = ctxTokens > base ? Math.max(base, 1000000) : base;
-      ctxPct = Math.min(100, Math.round((ctxTokens / ctxLimit) * 1000) / 10); }
+    if (r) {
+      ctxLimit = ctxLimitFor(ctxTokens, RE_1M.test(meta.model || '') ? CTX_1M : 200000);
+      ctxPct = ctxPctOf(ctxTokens, ctxLimit);
+    }
     out.push({
       id: 'cowork:' + meta.sessionId, provider: 'cowork',
       label: projName(folder), cwd: folder, title: meta.title || (r && r.title) || null,
@@ -493,6 +503,86 @@ function listCoworkSessions() {
     });
   }
   return out;
+}
+
+// ══════════════════ 子 agent 计数（同一对话派出的多个 agent → 套圈）══════════════════
+// Claude Code 把每个子 agent（Task 工具 / workflow）写到 <会话>/subagents/**/agent-*.jsonl。
+// 同一对话同时有几个 agent 在干活，就在该对话的光环里套几个内圈；某个 agent 干完(转录停写) → 它的圈消失、其余顶上。
+const AGENT_ACTIVE_MS = 30 * 1000;   // 子 agent 转录这么久没写 → 视为已完成（其内圈消失）
+function countActiveAgents(sessionFile) {
+  const dir = sessionFile.replace(/\.jsonl$/, '') + path.sep + 'subagents';
+  const files = []; walkFiles(dir, files, WALK_AGENT);
+  const now = Date.now(); let count = 0;
+  for (const { m } of files) if (now - m < AGENT_ACTIVE_MS) count++;
+  return count;
+}
+
+// ══════════════════ 多会话枚举（监控墙）：最近活跃的所有 Claude/Codex/Cowork 会话 ══════════════════
+const SESSION_WINDOW_MS = 24 * 60 * 60 * 1000;   // 回退池：最近一天有活动的会话
+function projName(d) { if (!d) return 'session'; const ps = String(d).split('/').filter(Boolean); return ps[ps.length - 1] || 'session'; }
+function buildSessions() {
+  const out = [], now = Date.now();
+  const cl = []; walkJsonl(PROJECTS, cl);
+  const clSel = cl.filter((x) => !ignored.has(x.p) && now - x.m <= SESSION_WINDOW_MS).sort((a, b) => b.m - a.m).slice(0, 6);
+  for (const { p, m } of clSel) {
+    const r = readClaudeSession(p, m); if (!r) continue;
+    if (r.modelId && RE_HAIKU.test(r.modelId)) continue;   // 排除后台额度保鲜（haiku）会话，不污染监控墙
+    out.push({ id: 'claude:' + p, provider: 'claude',
+      label: projName(r.cwd), title: r.title || null, model: r.model, modelId: r.modelId,
+      ctx: r.ctxPct, ctxTokens: r.ctxTokens, ctxLimit: r.ctxLimit,
+      cost: null, updatedAt: r.lastTs || m, state: r.state, thinking: r.thinking, active: r.state !== 'idle',   // 事件流状态：active=非空闲（end_turn 即时退出）
+      agents: r.state !== 'idle' ? countActiveAgents(p) : 0 });   // 该对话当前在干活的子 agent 数 → 套几个内圈
+  }
+  const cx = []; walkRollouts(path.join(CODEX_DIR, 'sessions'), cx);
+  const cxSel = cx.filter((x) => now - x.m <= SESSION_WINDOW_MS).sort((a, b) => b.m - a.m).slice(0, 4);
+  for (const { p, m } of cxSel) {
+    const tail = readChunk(p, true, TAIL_BYTES);   // 尾读一次，token_count 与回合状态共用
+    const tc = codexLastTokenCount(p, tail); if (!tc) continue;
+    const { cur, cw } = codexUsage(tc);
+    const id = codexFindModel(p) || 'codex';
+    const cs = readCodexState(p, m, tail);   // 回合生命周期判状态（task_started 未完=工作中；reasoning=思考/输出=执行；complete=空闲），修"思考时误判空闲"
+    out.push({ id: 'codex:' + p, provider: 'codex', label: 'Codex', title: null, model: CODEX_MODEL_NAMES[id] || id, modelId: id,
+      ctx: codexCtxPct(cur, cw), ctxTokens: cur, ctxLimit: cw, cost: null, updatedAt: m, state: cs.state, active: cs.active });
+  }
+  cwSessions = listCoworkSessions();   // Claude Cowork 会话（独立 provider，不并入 Claude Code）
+  for (const s of cwSessions) out.push(s);
+  out.sort((a, b) => b.updatedAt - a.updatedAt);
+  return out;
+}
+
+// ══════════════════ 多 provider 统一视图 + 快照/SSE ══════════════════
+function claudeView() {
+  if (!state.statusline && !state.limits) return null;
+  return {
+    label: 'Claude Code', statusline: state.statusline, limits: state.limits, plan: readClaudePlan(),
+    account: state.account || (state.limits ? 'subscription' : 'unknown'),
+    source: state.source, lastHook: state.lastHook, updatedAt: state.updatedAt, history: state.history,
+  };
+}
+function codexView() {
+  const c = state.codex;
+  if (!c || !c.available) return null;
+  // 状态每次快照都从 rollout 实时算（每 2s 一次）——这样 done→idle、stale→idle 的"按时间推进"
+  // 不依赖文件 mtime 变化，思考时(文件十几秒不写)也不会误判空闲。
+  const cs = cxFile ? readCodexState(cxFile, c.updatedAt) : { state: 'idle' };
+  return {
+    label: 'Codex CLI',
+    statusline: {
+      _source: 'rollout', _state: cs.state, model: { display_name: c.model, id: c.modelId },
+      context_window: { used_percentage: c.ctxPct, used_tokens: c.ctxTokens, context_window_size: c.ctxMax,
+        total_input_tokens: c.tokIn, total_output_tokens: c.tokOut },
+    },
+    limits: c.limits, account: c.account, source: 'rollout', lastHook: null, updatedAt: c.updatedAt, history: [],
+  };
+}
+function cursorView() {
+  const c = state.cursor;
+  if (!c || !c.available) return null;
+  return {
+    label: 'Cursor',
+    statusline: { _source: 'cursor', model: { display_name: c.model || 'Cursor', id: c.model || '' }, context_window: null },
+    account: 'budget', subStatus: c.subStatus, limits: null, source: 'cursor', lastHook: null, updatedAt: c.updatedAt, history: [],
+  };
 }
 function coworkView() {
   const arr = cwSessions.slice().sort((a, b) => b.updatedAt - a.updatedAt);
@@ -510,57 +600,7 @@ function coworkView() {
   };
 }
 
-// ---------- 子 agent 计数（同一对话派出的多个 agent → 套圈）----------
-// Claude Code 把每个子 agent（Task 工具 / workflow）写到 <会话>/subagents/**/agent-*.jsonl。
-// 同一对话同时有几个 agent 在干活，就在该对话的光环里套几个内圈；某个 agent 干完(转录停写) → 它的圈消失、其余顶上。
-const AGENT_ACTIVE_MS = 30 * 1000;   // 子 agent 转录这么久没写 → 视为已完成（其内圈消失）
-function walkAgents(dir, acc) {
-  let entries; try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
-  for (const e of entries) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) walkAgents(p, acc);
-    else if (e.name.startsWith('agent-') && e.name.endsWith('.jsonl')) { try { acc.push(statSync(p).mtimeMs); } catch {} }
-  }
-}
-function countActiveAgents(sessionFile) {
-  const dir = sessionFile.replace(/\.jsonl$/, '') + path.sep + 'subagents';
-  const mtimes = []; walkAgents(dir, mtimes);
-  const now = Date.now(); let n = 0;
-  for (const m of mtimes) if (now - m < AGENT_ACTIVE_MS) n++;
-  return n;
-}
-
-// ---------- 多会话枚举（监控墙）：最近活跃的所有 Claude/Codex 会话 ----------
-const SESSION_WINDOW_MS = 24 * 60 * 60 * 1000;   // 回退池：最近一天有活动的会话
-function projName(d) { if (!d) return 'session'; const ps = String(d).split('/').filter(Boolean); return ps[ps.length - 1] || 'session'; }
-function buildSessions() {
-  const out = [], now = Date.now();
-  const cl = []; walkJsonl(PROJECTS, cl);
-  const clSel = cl.filter((x) => !ignored.has(x.p) && now - x.m <= SESSION_WINDOW_MS).sort((a, b) => b.m - a.m).slice(0, 6);
-  for (const { p, m } of clSel) {
-    const r = readClaudeSession(p, m); if (!r) continue;
-    if (r.modelId && /haiku/i.test(r.modelId)) continue;   // 排除后台额度保鲜（haiku）会话，不污染监控墙
-    out.push({ id: 'claude:' + p, provider: 'claude',
-      label: projName(r.cwd), title: r.title || null, model: r.model, modelId: r.modelId,
-      ctx: r.ctxPct, ctxTokens: r.ctxTokens, ctxLimit: r.ctxLimit,
-      cost: null, updatedAt: r.lastTs || m, state: r.state, thinking: r.thinking, active: r.state !== 'idle',   // 事件流状态：active=非空闲（end_turn 即时退出）
-      agents: r.state !== 'idle' ? countActiveAgents(p) : 0 });   // 该对话当前在干活的子 agent 数 → 套几个内圈
-  }
-  const cx = []; walkRollouts(path.join(CODEX_DIR, 'sessions'), cx);
-  const cxSel = cx.filter((x) => now - x.m <= SESSION_WINDOW_MS).sort((a, b) => b.m - a.m).slice(0, 4);
-  for (const { p, m } of cxSel) {
-    const tc = codexLastTokenCount(p); if (!tc) continue;
-    const info = tc.info || {}, lastU = info.last_token_usage || {}, cw = info.model_context_window || null, cur = lastU.input_tokens || 0;
-    const id = codexFindModel(p) || 'codex';
-    const cs = readCodexState(p, m);   // 回合生命周期判状态（task_started 未完=工作中；reasoning=思考/输出=执行；complete=空闲），修"思考时误判空闲"
-    out.push({ id: 'codex:' + p, provider: 'codex', label: 'Codex', title: null, model: CODEX_MODEL_NAMES[id] || id, modelId: id,
-      ctx: cw ? Math.round((cur / cw) * 1000) / 10 : null, ctxTokens: cur, ctxLimit: cw, cost: null, updatedAt: m, state: cs.state, active: cs.active });
-  }
-  cwSessions = listCoworkSessions();   // Claude Cowork 会话（独立 provider，不并入 Claude Code）
-  for (const s of cwSessions) out.push(s);
-  out.sort((a, b) => b.updatedAt - a.updatedAt);
-  return out;
-}
+const clients = new Set();   // SSE 连接中的手机/客户端
 
 function snapshot() {
   const sources = {};
@@ -572,11 +612,14 @@ function snapshot() {
   return { sources, sessions: state.sessions, serverNow: Date.now(), config: state.config, lan: lanIps().map((ip) => 'http://' + ip + ':' + PORT), preview };
 }
 
+function sseFrame() { return `data: ${JSON.stringify(snapshot())}\n\n`; }
+
 function broadcast() {
-  const frame = `data: ${JSON.stringify(snapshot())}\n\n`;
+  const frame = sseFrame();
   for (const res of clients) { try { res.write(frame); } catch {} }
 }
 
+// ══════════════════ HTTP 服务 ══════════════════
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -585,6 +628,18 @@ function readBody(req) {
     req.on('error', reject);
   });
 }
+// 各 POST 路由统一模式：先 readBody，再在 try 里 parseJson（空 body 视为 {}），解析失败回 400。
+function parseJson(body) { return JSON.parse(body || '{}'); }
+
+async function serveHtml(res, name) {
+  try {
+    const html = await readFile(path.join(__dirname, name));
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(html);
+  } catch { res.writeHead(500); res.end(name + ' missing'); }
+}
+
+const STATIC_CT = { manifest: 'application/manifest+json; charset=utf-8', png: 'image/png', svg: 'image/svg+xml; charset=utf-8', mp4: 'video/mp4', webm: 'video/webm' };
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -598,10 +653,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   // 静态资源：PWA manifest、SVG 图标、主屏图标 PNG（iOS 添加到主屏幕需 PNG 才可靠）、常亮兜底视频
-  if (req.method === 'GET' && (url.pathname === '/manifest.webmanifest' || /^\/icon[\w-]*\.(svg|png)$/.test(url.pathname) || /^\/nosleep\.(mp4|webm)$/.test(url.pathname))) {
+  if (req.method === 'GET' && (url.pathname === '/manifest.webmanifest' || RE_ICON_PATH.test(url.pathname) || RE_NOSLEEP_PATH.test(url.pathname))) {
     const ext = url.pathname.split('.').pop();
-    const CT = { manifest: 'application/manifest+json; charset=utf-8', png: 'image/png', svg: 'image/svg+xml; charset=utf-8', mp4: 'video/mp4', webm: 'video/webm' };
-    const ctype = url.pathname === '/manifest.webmanifest' ? CT.manifest : (CT[ext] || 'application/octet-stream');
+    const ctype = url.pathname === '/manifest.webmanifest' ? STATIC_CT.manifest : (STATIC_CT[ext] || 'application/octet-stream');
     try {
       const buf = await readFile(path.join(__dirname, url.pathname.slice(1)));
       res.writeHead(200, { 'content-type': ctype, 'cache-control': 'public, max-age=86400' });
@@ -610,24 +664,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // 手机端全屏画面
   if (req.method === 'GET' && url.pathname === '/') {
-    try {
-      const html = await readFile(path.join(__dirname, 'dashboard.html'));
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(html);
-    } catch {
-      res.writeHead(500); res.end('dashboard.html missing');
-    }
+    await serveHtml(res, 'dashboard.html');
     return;
   }
 
   // 电脑端控制台（设置 + 数据源诊断都在这里；手机端只全屏显示）
   if (req.method === 'GET' && (url.pathname === '/control' || url.pathname === '/settings')) {
-    try {
-      const html = await readFile(path.join(__dirname, 'control.html'));
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(html);
-    } catch { res.writeHead(500); res.end('control.html missing'); }
+    await serveHtml(res, 'control.html');
     return;
   }
 
@@ -638,7 +683,7 @@ const server = http.createServer(async (req, res) => {
       'connection': 'keep-alive',
       'access-control-allow-origin': '*',
     });
-    res.write(`data: ${JSON.stringify(snapshot())}\n\n`);
+    res.write(sseFrame());
     clients.add(res);
     const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch {} }, 15000);
     req.on('close', () => { clearInterval(ping); clients.delete(res); });
@@ -648,11 +693,11 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && url.pathname === '/ingest') {
     const body = await readBody(req);
     try {
-      const json = JSON.parse(body || '{}');
+      const json = parseJson(body);
       // 后台额度保鲜用 haiku 起会话：其 statusLine 即便漏配 limitsOnly，也绝不污染前台显示。
       // 凡 ingest 模型属保鲜模型(haiku) → 一律只取额度、忽略其转录（作者：保鲜绝不污染显示）。
       const inModel = json && json.model ? (json.model.id || json.model.display_name || '') : '';
-      if (url.searchParams.get('limitsOnly') || /haiku/i.test(inModel)) {
+      if (url.searchParams.get('limitsOnly') || RE_HAIKU.test(inModel)) {
         captureLimits(json);
         if (json.transcript_path) ignored.add(json.transcript_path);
         broadcast();
@@ -666,9 +711,7 @@ const server = http.createServer(async (req, res) => {
       // 自适应账号判定：见过 rate_limits → 订阅；否则有花费 → API（订阅永不降级）
       if (!hadLimits && state.account !== 'subscription' && json.cost && json.cost.total_cost_usd != null) state.account = 'api';
       try { writeFileSync(path.join(DATA, 'latest-claude.json'), JSON.stringify(json)); } catch {}
-      const m = extractMetrics(json);
-      state.history.push({ t: state.updatedAt, ctx: m.ctx, five: m.five, seven: m.seven, cost: m.cost });
-      if (state.history.length > 600) state.history.shift();
+      pushHistory(state.updatedAt, json);
       broadcast();
       res.writeHead(204); res.end();
     } catch {
@@ -680,7 +723,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && url.pathname === '/ingest-hook') {
     const body = await readBody(req);
     try {
-      const json = JSON.parse(body || '{}');
+      const json = parseJson(body);
       state.lastHook = { event: json.event || 'unknown', payload: json.payload || {}, ts: Date.now() };
       broadcast();
       res.writeHead(204); res.end();
@@ -694,7 +737,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && url.pathname === '/config') {
     const body = await readBody(req);
     try {
-      const j = JSON.parse(body || '{}');
+      const j = parseJson(body);
       for (const k of ['theme', 'lang', 'provider']) if (k in j) state.config[k] = j[k];
       // pet: only the built-in idle companion on/off (custom art is a client-side window.AWAITLIGHT_PET hook)
       if ('pet' in j) state.config.pet = j.pet === 'off' ? 'off' : 'default';
@@ -714,7 +757,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/refresh') {
-    refreshLimits('manual');
+    refreshLimits();
     res.writeHead(202); res.end('refreshing');
     return;
   }
@@ -733,6 +776,7 @@ function lanIps() {
   return out;
 }
 
+// ══════════════════ 启动 ══════════════════
 loadLimits();   // 启动时恢复上次拿到的 5h/7d（重启不丢）
 loadConfig();   // 恢复电脑端控制台的设置（主题/语言/显示哪个 provider）
 
@@ -785,6 +829,6 @@ server.listen(PORT, () => {
   // 后台额度保鲜：启动 20s 后先刷一次，之后每 REFRESH_MIN 分钟一次（零操作保持最新）
   console.log('  后台额度保鲜：每 ' + REFRESH_MIN + ' 分钟用 ' + REFRESH_MODEL + ' 静默刷新 5h/7d，几乎不耗额度。');
   console.log(line);
-  setTimeout(() => refreshLimits('startup'), 20000);
-  setInterval(() => refreshLimits('interval'), REFRESH_MIN * 60000);
+  setTimeout(() => refreshLimits(), 20000);
+  setInterval(() => refreshLimits(), REFRESH_MIN * 60000);
 });
