@@ -1,11 +1,58 @@
 {
   "name": "awaitlight",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.9.0",
   "type": "module",
   "description": "Turn any spare phone into a live status display for your AI coding agents (Claude Code, Codex, Cursor). Zero-config, 100% local.",
   "license": "MIT",
+  "bin": {
+    "awaitlight": "cli.mjs"
+  },
   "scripts": {
     "start": "node server.js"
-  }
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "cli.mjs",
+    "server.js",
+    "hook-bridge.mjs",
+    "statusline-bridge.mjs",
+    "install-hooks.mjs",
+    "refresh-claude.py",
+    "dashboard.html",
+    "control.html",
+    "pets/",
+    "icon.svg",
+    "icon-180.png",
+    "icon-192.png",
+    "icon-512.png",
+    "icon-maskable.png",
+    "icon-maskable.svg",
+    "manifest.webmanifest",
+    "nosleep.mp4",
+    "nosleep.webm",
+    "README.zh-CN.md",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Awaitlight/awaitlight.git"
+  },
+  "homepage": "https://awaitlight.com",
+  "bugs": {
+    "url": "https://github.com/Awaitlight/awaitlight/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "cursor",
+    "ai-agents",
+    "status-display",
+    "dashboard",
+    "monitoring",
+    "local-first",
+    "zero-dependency",
+    "pwa"
+  ]
 }

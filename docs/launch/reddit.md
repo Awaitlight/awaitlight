@@ -14,7 +14,7 @@ Not affiliated with Anthropic, OpenAI, or Anysphere — it just reads the local 
 
 I have a habit of starting an agent, tabbing away, and then losing track of whether it's still working, waiting on me, or done. With three or four going at once it got bad enough that I built something to fix it, and it's been useful enough day-to-day that I figured I'd share.
 
-It's called Awaitlight. You run a Node server on your computer, then open the LAN address it prints on a spare phone (same Wi-Fi, landscape). The phone turns into a status screen for your agents: each one shows its state as a colored halo — running, thinking, waiting on you, or idle — plus context-window remaining, your 5-hour and weekly usage limits, model, and cost. Run several agents and they tile into a wall, so I can see the whole fleet from across the desk without alt-tabbing.
+It's called Awaitlight. You run `npx awaitlight` (Node 18+) — or grab the desktop client, which since v1.1.0 has the engine built in — then open the LAN address it prints on a spare phone (same Wi-Fi, landscape). The phone turns into a status screen for your agents: each one shows its state as a colored halo — running, thinking, waiting on you, or idle — plus context-window remaining, your 5-hour and weekly usage limits, model, and cost. Run several agents and they tile into a wall, so I can see the whole fleet from across the desk without alt-tabbing.
 
 I know you can just tail the session jsonl in a pane. The thing the phone buys me is a glanceable screen I don't have to switch focus to — especially the "waiting on you" state, which is the one I kept missing.
 

@@ -1,5 +1,7 @@
 # X / Twitter — build-in-public thread
 
+> **Note (2026-07):** the X channel has been dropped — this content is being repurposed for Bluesky instead. Original copy kept below for reference.
+
 Post from your own @awaitlight account. Attach the demo image/GIF to tweet 1. Keep ≤2 hashtags.
 
 ---
